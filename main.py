@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Forecast Roblox Up-and-Coming top-10 (make.fun bounty).
+"""Predict the Roblox Up-and-Coming top-10 for the make.fun bounty.
 
-Method: empirical place-migration matrix estimated from the given chart history,
-split into three 24-hour horizon buckets and averaged (the scored window is 72
-hourly reads, so each bucket weighs one third). For every game currently on the
-chart we take its marginal probability of occupying each of the top-10 places;
-per place we name every candidate with meaningful mass and scale the named mass
-to 0.5, leaving the rest unnamed for games that may enter the chart from outside.
-Python 3.13, standard library only, deterministic.
+The predictor estimates an empirical place-migration matrix from the supplied
+chart history, split into three 24-hour horizon buckets and averaged because the
+scored window is 72 hourly reads, so each bucket contributes one third. For
+every game currently on the chart it computes the marginal chance of occupying
+each of the top-10 places; per place every candidate with meaningful mass is
+named and the named mass is scaled to 0.5, leaving the remaining mass unnamed
+for games that may enter the chart from outside. Python 3.13, standard library
+only, deterministic.
 """
 import json
 import math
@@ -23,79 +24,79 @@ MIN_P = 0.0005         # below this a candidate is not named
 PLACES = 10
 
 
-def dt_hours(a: str, b: str) -> float:
+def hours_between(earlier_at: str, later_at: str) -> float:
     from datetime import datetime
-    ta = datetime.fromisoformat(a.replace("Z", "+00:00"))
-    tb = datetime.fromisoformat(b.replace("Z", "+00:00"))
-    return (tb - ta).total_seconds() / 3600.0
+    earlier = datetime.fromisoformat(earlier_at.replace("Z", "+00:00"))
+    later = datetime.fromisoformat(later_at.replace("Z", "+00:00"))
+    return (later - earlier).total_seconds() / 3600.0
 
 
 def main() -> None:
-    with open(os.path.join(INPUT_DIR, "task.json")) as f:
-        task = json.load(f)
-    places = min(int(task.get("places", PLACES)), PLACES)
-    snaps = [json.loads(l) for l in open(os.path.join(INPUT_DIR, "history.ndjson")) if l.strip()]
-    snaps.sort(key=lambda s: s["at"])
+    with open(os.path.join(INPUT_DIR, "task.json")) as task_file:
+        task_config = json.load(task_file)
+    place_count = min(int(task_config.get("places", PLACES)), PLACES)
+    snapshots = [json.loads(line) for line in open(os.path.join(INPUT_DIR, "history.ndjson")) if line.strip()]
+    snapshots.sort(key=lambda snapshot: snapshot["at"])
 
-    last = snaps[-1]
-    chart = [r["universe_id"] for r in sorted(last["up_and_coming"], key=lambda x: x["rank"])]
-    top = chart[:MAX_RANK]
+    latest_snapshot = snapshots[-1]
+    chart_universe_ids = [row["universe_id"] for row in sorted(latest_snapshot["up_and_coming"], key=lambda item: item["rank"])]
+    top_ranked = chart_universe_ids[:MAX_RANK]
 
     # migration counts per horizon bucket: from-place -> to-place (MAX_RANK+1 = off chart)
-    OFF = MAX_RANK + 1
-    mig = {b: defaultdict(lambda: defaultdict(float)) for b in BUCKETS}
-    for i, s in enumerate(snaps):
-        a0 = [r["universe_id"] for r in sorted(s["up_and_coming"], key=lambda x: x["rank"])]
-        for s2 in snaps:
-            d = dt_hours(s["at"], s2["at"])
-            if d <= 0:
+    OFF_CHART = MAX_RANK + 1
+    migration_counts = {bucket: defaultdict(lambda: defaultdict(float)) for bucket in BUCKETS}
+    for snapshot in snapshots:
+        current_chart = [row["universe_id"] for row in sorted(snapshot["up_and_coming"], key=lambda item: item["rank"])]
+        for future_snapshot in snapshots:
+            delta_hours = hours_between(snapshot["at"], future_snapshot["at"])
+            if delta_hours <= 0:
                 continue
-            act = [r["universe_id"] for r in sorted(s2["up_and_coming"], key=lambda x: x["rank"])]
-            for b in BUCKETS:
-                if not (b[0] < d <= b[1]):
+            future_chart = [row["universe_id"] for row in sorted(future_snapshot["up_and_coming"], key=lambda item: item["rank"])]
+            for bucket in BUCKETS:
+                if not (bucket[0] < delta_hours <= bucket[1]):
                     continue
-                for p, uid in enumerate(a0, 1):
-                    if p > MAX_RANK:
+                for from_place, universe_id in enumerate(current_chart, 1):
+                    if from_place > MAX_RANK:
                         break
-                    if uid in act[:MAX_RANK]:
-                        q = act.index(uid) + 1
+                    if universe_id in future_chart[:MAX_RANK]:
+                        to_place = future_chart.index(universe_id) + 1
                     else:
-                        q = OFF
-                    mig[b][p][min(q, OFF)] += 1.0
+                        to_place = OFF_CHART
+                    migration_counts[bucket][from_place][min(to_place, OFF_CHART)] += 1.0
 
     # per bucket transition rows (normalised); buckets with no data fall back to persistence
-    rows = {}
-    for b in BUCKETS:
-        rows[b] = {}
-        for p in range(1, MAX_RANK + 1):
-            tot = sum(mig[b][p].values())
-            if tot <= 0:
-                rows[b][p] = {q: (1.0 if q == p else 0.0) for q in range(1, OFF + 1)}
+    transition_rows = {}
+    for bucket in BUCKETS:
+        transition_rows[bucket] = {}
+        for from_place in range(1, MAX_RANK + 1):
+            total = sum(migration_counts[bucket][from_place].values())
+            if total <= 0:
+                transition_rows[bucket][from_place] = {to_place: (1.0 if to_place == from_place else 0.0) for to_place in range(1, OFF_CHART + 1)}
             else:
-                rows[b][p] = {q: mig[b][p][q] / tot for q in range(1, OFF + 1)}
+                transition_rows[bucket][from_place] = {to_place: migration_counts[bucket][from_place][to_place] / total for to_place in range(1, OFF_CHART + 1)}
 
     # marginal probability per place: average of the three bucket rows
-    marg = {q: defaultdict(float) for q in range(1, places + 1)}
-    for b in BUCKETS:
-        for p, uid in enumerate(top, 1):
-            for q in range(1, places + 1):
-                marg[q][uid] += rows[b][p][q] / len(BUCKETS)
+    marginal_probabilities = {place: defaultdict(float) for place in range(1, place_count + 1)}
+    for bucket in BUCKETS:
+        for from_place, universe_id in enumerate(top_ranked, 1):
+            for place in range(1, place_count + 1):
+                marginal_probabilities[place][universe_id] += transition_rows[bucket][from_place][place] / len(BUCKETS)
 
-    probabilities = []
-    top10 = chart[:places]
-    for q in range(1, places + 1):
-        cand = sorted(marg[q].items(), key=lambda x: -x[1])
-        cand = [(u, v) for u, v in cand if v > MIN_P]
-        s = sum(v for _, v in cand)
-        if s > SCALE and s > 0:
-            cand = [(u, v * SCALE / s) for u, v in cand]
-        for uid, pv in cand:
-            probabilities.append({"universe_id": uid, "place": q, "p": round(pv, 10)})
+    forecast_rows = []
+    top_ten = chart_universe_ids[:place_count]
+    for place in range(1, place_count + 1):
+        candidates = sorted(marginal_probabilities[place].items(), key=lambda item: -item[1])
+        candidates = [(universe_id, probability) for universe_id, probability in candidates if probability > MIN_P]
+        total_named = sum(probability for _, probability in candidates)
+        if total_named > SCALE and total_named > 0:
+            candidates = [(universe_id, probability * SCALE / total_named) for universe_id, probability in candidates]
+        for universe_id, probability in candidates:
+            forecast_rows.append({"universe_id": universe_id, "place": place, "p": round(probability, 10)})
 
-    out = {"probabilities": probabilities, "top10": top10}
+    output = {"probabilities": forecast_rows, "top10": top_ten}
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    with open(os.path.join(OUTPUT_DIR, task.get("output", "forecast.json")), "w") as f:
-        f.write(json.dumps(out) + "\n")
+    with open(os.path.join(OUTPUT_DIR, task_config.get("output", "forecast.json")), "w") as output_file:
+        output_file.write(json.dumps(output) + "\n")
 
 
 if __name__ == "__main__":
