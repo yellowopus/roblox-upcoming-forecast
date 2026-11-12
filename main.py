@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# The method fits an empirical place-migration matrix from the chart history,
+# splits transitions into three 24-hour horizon buckets that each contribute one
+# third, and scales the named probability mass per place to 0.5.
 """Predict the Roblox Up-and-Coming top-10 for the make.fun bounty.
 
 The predictor estimates an empirical place-migration matrix from the supplied
@@ -40,7 +43,7 @@ def main() -> None:
 
     latest_snapshot = snapshots[-1]
     chart_universe_ids = [row["universe_id"] for row in sorted(latest_snapshot["up_and_coming"], key=lambda item: item["rank"])]
-    top_ranked = chart_universe_ids[:MAX_RANK]
+    ranked_universe_ids = chart_universe_ids[:MAX_RANK]
 
     # migration counts per horizon bucket: from-place -> to-place (MAX_RANK+1 = off chart)
     OFF_CHART = MAX_RANK + 1
@@ -76,20 +79,20 @@ def main() -> None:
                 transition_rows[bucket][from_place] = {to_place: migration_counts[bucket][from_place][to_place] / total for to_place in range(1, OFF_CHART + 1)}
 
     # marginal probability per place: average of the three bucket rows
-    marginal_probabilities = {place: defaultdict(float) for place in range(1, place_count + 1)}
+    place_probabilities = {place: defaultdict(float) for place in range(1, place_count + 1)}
     for bucket in BUCKETS:
-        for from_place, universe_id in enumerate(top_ranked, 1):
+        for from_place, universe_id in enumerate(ranked_universe_ids, 1):
             for place in range(1, place_count + 1):
-                marginal_probabilities[place][universe_id] += transition_rows[bucket][from_place][place] / len(BUCKETS)
+                place_probabilities[place][universe_id] += transition_rows[bucket][from_place][place] / len(BUCKETS)
 
     forecast_rows = []
     top_ten = chart_universe_ids[:place_count]
     for place in range(1, place_count + 1):
-        candidates = sorted(marginal_probabilities[place].items(), key=lambda item: -item[1])
+        candidates = sorted(place_probabilities[place].items(), key=lambda item: -item[1])
         candidates = [(universe_id, probability) for universe_id, probability in candidates if probability > MIN_P]
-        total_named = sum(probability for _, probability in candidates)
-        if total_named > SCALE and total_named > 0:
-            candidates = [(universe_id, probability * SCALE / total_named) for universe_id, probability in candidates]
+        total_named_mass = sum(probability for _, probability in candidates)
+        if total_named_mass > SCALE and total_named_mass > 0:
+            candidates = [(universe_id, probability * SCALE / total_named_mass) for universe_id, probability in candidates]
         for universe_id, probability in candidates:
             forecast_rows.append({"universe_id": universe_id, "place": place, "p": round(probability, 10)})
 
