@@ -6,7 +6,7 @@ split into three 24-hour horizon buckets and averaged (the scored window is 72
 hourly reads, so each bucket weighs one third). For every game currently on the
 chart we take its marginal probability of occupying each of the top-10 places;
 per place we name every candidate with meaningful mass and scale the named mass
-to 0.85, leaving ~15% unnamed for games that may enter the chart from outside.
+to 0.5, leaving the rest unnamed for games that may enter the chart from outside.
 Python 3.13, standard library only, deterministic.
 """
 import json
@@ -18,7 +18,7 @@ INPUT_DIR = os.environ.get("MAKEFUN_INPUT_DIR", "/input")
 OUTPUT_DIR = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
 MAX_RANK = 15          # model ranks 1..15; anything else is "off chart"
 BUCKETS = ((0, 24), (24, 48), (48, 72))   # hours ahead
-SCALE = 0.5           # total named probability per place
+SCALE = 0.5            # total named probability per place
 MIN_P = 0.0005         # below this a candidate is not named
 PLACES = 10
 
